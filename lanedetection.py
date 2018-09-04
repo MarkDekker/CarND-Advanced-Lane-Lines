@@ -172,7 +172,7 @@ def normalise_image(image, minimum=0, maximum=255):
                              norm_type=cv2.NORM_MINMAX)
     return norm_img.astype(np.dtype('uint8'))
 
-def dilate_and_threshold(image, threshold=50, radius=15):
+def dilate_and_threshold(image, threshold=50, radius=30):
     """Grow bright areas by the given radius in a grayscale image based on 
     an input threshold.
     """
@@ -186,29 +186,53 @@ def accentuate_lane_lines(image):
     extractions which are then combined to intensify the lane lines.
     """
 
-    saturation = cv2.cvtColor(image, cv2.COLOR_RGB2HLS)[:, :, 2]
-    yellow = cv2.cvtColor(image, cv2.COLOR_RGB2YUV)[:, :, 2]
-    red = image[:, :, 0]
-    lightness = cv2.cvtColor(image, cv2.COLOR_RGB2HLS)[:, :, 1]
-    darkness = np.where((255-lightness) > 200, (255-lightness), 0)
-    red = exposure.adjust_gamma(red, gamma=2)
-    sobel = abs_sobel(red, thresh_min=20)
-    grow_sobel = dilate_and_threshold(sobel, threshold=200)
+    resized_image = cv2.resize(image, (1280, image.shape[0]))
+    resized_image = np.where(resized_image < 50, 50, resized_image)
 
-    combo_img = (255-saturation)  
-    combo_img = combine_images(red, combo_img, method='subtract')
-    combo_img = combine_images(combo_img, saturation, method='add')
-    combo_img = np.where(combo_img > 0, combo_img * 1.0, combo_img * 0.5)
-    combo_img = combine_images(saturation, yellow, method='add')
-    combo_img = combine_images(combo_img, red, method='add')
-    combo_img = exposure.adjust_gamma(combo_img, gamma=2) 
-    #combo_img = combine_images(grow_sobel*100,combo_img, method='add')
+    saturation = cv2.cvtColor(resized_image, cv2.COLOR_RGB2HLS)[:, :, 2]
+    yellow = cv2.cvtColor(resized_image, cv2.COLOR_RGB2YUV)[:, :, 2]
+    red = resized_image [:, :, 0]
+    lightness = cv2.cvtColor(resized_image, cv2.COLOR_RGB2HLS)[:, :, 1]
+    whites = np.where(lightness > 200, 150, 0)
+    darkness = np.where((255-lightness) > 200, (255-lightness), 0)
+
+    clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8,8))
+    red = clahe.apply(red)
+    red = exposure.adjust_gamma(red, gamma=4)
+    #red = normalise_image((red)**1.5)
+    sobel = abs_sobel(red, thresh_min=30)
+
+    sobel_shifted = (translate_horz(sobel, direction='left', shift=0.01) * 0.5 +
+                     translate_horz(sobel, direction='right', shift=0.01)  * 0.5)
+
+    img = cv2.imread('j.png',0)
+    kernel = np.ones((3,3),np.uint8)
+    sobel_shifted = cv2.erode(sobel_shifted,kernel)
+    grow_sobel = dilate_and_threshold(sobel_shifted, threshold=150, radius=3)
+
+
+    saturation = np.where(grow_sobel > 0, 255, saturation)
+    saturation = combine_images(saturation, yellow, method='add')
+    #combo_img = (255-saturation) * 0.5
+    combo_img = combine_images(red, (255-saturation) * 0.5,  method='subtract')
+    #combo_img = exposure.adjust_gamma(combo_img, gamma=2)
+    #sat_2 = combine_images((255-saturation), darkness, method='multiply')
+    #combo_img = combine_images(combo_img, sat_2, method='subtract')
+    #combo_img = np.where(combo_img > 0, combo_img * 1.0, combo_img * 0.5)
+    #combo_img = combine_images(combo_img, yellow, method='add')
+    #combo_img = combine_images(sobel * 100,combo_img, method='multiply')
     #combo_img = combine_images(combo_img, darkness, method='subtract')
+
+    
+    #grow_sobel = dilate_and_threshold(sobel, threshold=100)
+
+    #combo_img = np.where(((combo_img > 50) & (grow_sobel > 0)), combo_img, 0)
+    combo_img = saturation#np.where(red > 210, red, 0)
 
     _, norm_thresh = cv2.threshold(normalise_image(combo_img), 
                                    0, 255, 
                                    cv2.THRESH_TOZERO)
-    return norm_thresh
+    return cv2.resize(norm_thresh, (image.shape[1], image.shape[0]))
 
 def visualise_bins(image, vertical_bins):
     """Show the vertical bin distribution on an example image."""
@@ -234,11 +258,11 @@ def detect_peak(img_hist, peak_pos_y, img_average, offset=0):
     
     confidence = 'high'
     
-    if peak_val < 30000.0:
+    if peak_val < 100.0:
         confidence = 'none'
-    elif peak_val < 120000.0:
+    elif peak_val < 1500.0:
         confidence = 'low'
-    elif peak_val < 400000.0:
+    elif peak_val < 2500.0:
         confidence = 'medium'
         
     peak_pos_x = peak_pos + offset
@@ -253,7 +277,7 @@ def detect_lines(img, v_bins, poly_left=None, poly_right=None):
     right_min = int(img.shape[1] * 1/2)
     
     img_mean = img.mean(axis=(0,1))
-    search_margin = 150
+    search_margin = 50
     
     pos = 0
     left_peaks = []
@@ -297,8 +321,8 @@ def detect_lines(img, v_bins, poly_left=None, poly_right=None):
             right_img_slice = img[pos:(pos + v_bin),r_start:r_end]
             right_offset = r_start
         
-        left_hist = np.sum(np.power(left_img_slice, 2.0), axis=0)
-        right_hist = np.sum(np.power(right_img_slice, 2.0), axis=0)
+        left_hist = np.sum(left_img_slice, axis=0)
+        right_hist = np.sum(right_img_slice, axis=0)
 
         left_peaks.append(detect_peak(left_hist, v_center, img_mean, offset=left_offset))
         right_peaks.append(detect_peak(right_hist, v_center, img_mean, offset=right_offset))
