@@ -186,39 +186,18 @@ def accentuate_lane_lines(image):
     """Performs a sequence of thresholds, gradient detection and colour channel
     extractions which are then combined to intensify the lane lines.
     """
-    yellow = cv2.cvtColor(image, cv2.COLOR_RGB2HLS)[:, :, 2]
+    saturation = cv2.cvtColor(image, cv2.COLOR_RGB2HLS)[:, :, 2]
     red = image [:, :, 0]
-    blue = image [:, :, 2]
-    
     darkness = np.where((255-red) > 200, 255, 0)
-
-    #clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8,8))
-    #red = clahe.apply(red)
     red = exposure.adjust_gamma(red, gamma=2)
-    whites = np.where(red > 180, 255, 0)
-    sobel_yel = abs_sobel(yellow, thresh_min=10)
+
+    sobel_sat = abs_sobel(saturation, thresh_min=10)
     sobel_red = abs_sobel(red, thresh_min=10)
-
-    sobel = sobel_red + sobel_yel# np.where(sobel_red + sobel_yel > 0, 255, 0)
-
+    sobel = sobel_red + sobel_sat
     sobel_shifted = (translate_horz(sobel, direction='left', shift=0.01) * 0.5 +
                      translate_horz(sobel, direction='right', shift=0.01)  * 0.5)
 
-    #kernel = np.ones((3,3),np.uint8)
-    #sobel_shifted = cv2.erode(sobel_shifted,kernel)
-    #grow_sobel = dilate_and_threshold(sobel_shifted, threshold=150, radius=5)
-    grow_darkness = dilate_and_threshold(darkness, threshold=150, radius=15)
-    
-    #filter_sobel = np.where((grow_sobel > 0) & (whites > 0), 255, 0)
-
-    #combo_img = combine_images(saturation, darkness, method='subtract')
-    #combo_img = combine_images(red, combo_img * 0.7,  method='subtract')
-    #combo_img = combine_images(filter_sobel,combo_img, method='add')
-    #combo_img = combine_images(combo_img, grow_darkness * 255, method='subtract')
-    combo_img = red
-    combo_img =  combine_images(combo_img, sobel_shifted, method='multiply')
-    #combo_img = combine_images(combo_img, (grow_darkness) * 255, method='subtract')
-    #combo_img = whites + sobel_yel - grow_darkness * 255# combine_images(sobel_shifted, grow_darkness * 255, method='subtract')
+    combo_img =  combine_images(red, sobel_shifted, method='multiply')
     combo_img = exposure.adjust_gamma(combo_img, gamma=2)
 
     _, norm_thresh = cv2.threshold(normalise_image(combo_img), 
