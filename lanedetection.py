@@ -3,9 +3,10 @@
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
+import time
 from skimage import exposure
 
-from utilityfun import plot_image, overlay_image
+from utilityfun import plot_image, overlay_image, darken_bg, plot_text
 
 def calibration_corner_detection(image_files, visualise=False):
     """Detect chessboard corners in input images for ensuing camera calibration."""
@@ -156,9 +157,9 @@ def combine_images(img1, img2, method="Add"):
         img2 = np.where(img2 > img1, img1, img2)
         return img1 - img2
     elif method.lower() == 'multiply':
-        img_out = img1 * img2
+        img_out = img1 * img2/128
         img_out = np.where(img_out > 255, 255, img_out)
-        return normalise_image(img1 * img2)
+        return normalise_image(img_out)
     else:
         print('Error: the supplied method is not recognised.')
 
@@ -185,54 +186,45 @@ def accentuate_lane_lines(image):
     """Performs a sequence of thresholds, gradient detection and colour channel
     extractions which are then combined to intensify the lane lines.
     """
+    yellow = cv2.cvtColor(image, cv2.COLOR_RGB2HLS)[:, :, 2]
+    red = image [:, :, 0]
+    blue = image [:, :, 2]
+    
+    darkness = np.where((255-red) > 200, 255, 0)
 
-    resized_image = cv2.resize(image, (1280, image.shape[0]))
-    resized_image = np.where(resized_image < 50, 50, resized_image)
+    #clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8,8))
+    #red = clahe.apply(red)
+    red = exposure.adjust_gamma(red, gamma=2)
+    whites = np.where(red > 180, 255, 0)
+    sobel_yel = abs_sobel(yellow, thresh_min=10)
+    sobel_red = abs_sobel(red, thresh_min=10)
 
-    saturation = cv2.cvtColor(resized_image, cv2.COLOR_RGB2HLS)[:, :, 2]
-    yellow = cv2.cvtColor(resized_image, cv2.COLOR_RGB2YUV)[:, :, 2]
-    red = resized_image [:, :, 0]
-    lightness = cv2.cvtColor(resized_image, cv2.COLOR_RGB2HLS)[:, :, 1]
-    whites = np.where(lightness > 200, 150, 0)
-    darkness = np.where((255-lightness) > 200, (255-lightness), 0)
-
-    clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8,8))
-    red = clahe.apply(red)
-    red = exposure.adjust_gamma(red, gamma=4)
-    #red = normalise_image((red)**1.5)
-    sobel = abs_sobel(red, thresh_min=30)
+    sobel = sobel_red + sobel_yel# np.where(sobel_red + sobel_yel > 0, 255, 0)
 
     sobel_shifted = (translate_horz(sobel, direction='left', shift=0.01) * 0.5 +
                      translate_horz(sobel, direction='right', shift=0.01)  * 0.5)
 
-    img = cv2.imread('j.png',0)
-    kernel = np.ones((3,3),np.uint8)
-    sobel_shifted = cv2.erode(sobel_shifted,kernel)
-    grow_sobel = dilate_and_threshold(sobel_shifted, threshold=150, radius=3)
-
-
-    saturation = np.where(grow_sobel > 0, 255, saturation)
-    saturation = combine_images(saturation, yellow, method='add')
-    #combo_img = (255-saturation) * 0.5
-    combo_img = combine_images(red, (255-saturation) * 0.5,  method='subtract')
-    #combo_img = exposure.adjust_gamma(combo_img, gamma=2)
-    #sat_2 = combine_images((255-saturation), darkness, method='multiply')
-    #combo_img = combine_images(combo_img, sat_2, method='subtract')
-    #combo_img = np.where(combo_img > 0, combo_img * 1.0, combo_img * 0.5)
-    #combo_img = combine_images(combo_img, yellow, method='add')
-    #combo_img = combine_images(sobel * 100,combo_img, method='multiply')
-    #combo_img = combine_images(combo_img, darkness, method='subtract')
-
+    #kernel = np.ones((3,3),np.uint8)
+    #sobel_shifted = cv2.erode(sobel_shifted,kernel)
+    #grow_sobel = dilate_and_threshold(sobel_shifted, threshold=150, radius=5)
+    grow_darkness = dilate_and_threshold(darkness, threshold=150, radius=15)
     
-    #grow_sobel = dilate_and_threshold(sobel, threshold=100)
+    #filter_sobel = np.where((grow_sobel > 0) & (whites > 0), 255, 0)
 
-    #combo_img = np.where(((combo_img > 50) & (grow_sobel > 0)), combo_img, 0)
-    combo_img = saturation#np.where(red > 210, red, 0)
+    #combo_img = combine_images(saturation, darkness, method='subtract')
+    #combo_img = combine_images(red, combo_img * 0.7,  method='subtract')
+    #combo_img = combine_images(filter_sobel,combo_img, method='add')
+    #combo_img = combine_images(combo_img, grow_darkness * 255, method='subtract')
+    combo_img = red
+    combo_img =  combine_images(combo_img, sobel_shifted, method='multiply')
+    #combo_img = combine_images(combo_img, (grow_darkness) * 255, method='subtract')
+    #combo_img = whites + sobel_yel - grow_darkness * 255# combine_images(sobel_shifted, grow_darkness * 255, method='subtract')
+    combo_img = exposure.adjust_gamma(combo_img, gamma=2)
 
     _, norm_thresh = cv2.threshold(normalise_image(combo_img), 
                                    0, 255, 
                                    cv2.THRESH_TOZERO)
-    return cv2.resize(norm_thresh, (image.shape[1], image.shape[0]))
+    return norm_thresh
 
 def visualise_bins(image, vertical_bins):
     """Show the vertical bin distribution on an example image."""
@@ -258,11 +250,11 @@ def detect_peak(img_hist, peak_pos_y, img_average, offset=0):
     
     confidence = 'high'
     
-    if peak_val < 100.0:
+    if peak_val/hist_avg < 500.0:
         confidence = 'none'
-    elif peak_val < 1500.0:
+    elif peak_val/hist_avg < 1500.0:
         confidence = 'low'
-    elif peak_val < 2500.0:
+    elif peak_val/hist_avg < 2000.0:
         confidence = 'medium'
         
     peak_pos_x = peak_pos + offset
@@ -277,7 +269,7 @@ def detect_lines(img, v_bins, poly_left=None, poly_right=None):
     right_min = int(img.shape[1] * 1/2)
     
     img_mean = img.mean(axis=(0,1))
-    search_margin = 50
+    search_margin = 15
     
     pos = 0
     left_peaks = []
@@ -332,12 +324,13 @@ def detect_lines(img, v_bins, poly_left=None, poly_right=None):
 
 def get_lane_poly(lane_points):
     accepted_confidence = ['high', 'medium']
-    
+
     x_points, y_points, = zip(*[(float(point[0]), float(point[1])) 
                                for point in lane_points 
                                if point[2] in accepted_confidence])
-    
+
     if len(x_points) < 3:
+        print('hello')
         x_points = [500] * 10
         y_points = range(0, 500, 50)
     
@@ -366,7 +359,7 @@ def get_highlighted_lane(l_poly, r_poly, img, padding=400):
                   for i, x in enumerate(x_l)])
     pts = np.array(pts_list, np.int32)
     
-    img_overlay_lines = cv2.polylines(img_overlay_lines, [pts], False, color, 10)
+    img_overlay_lines = cv2.polylines(img_overlay_lines, [pts], False, color, 2)
     img_overlay_fill = cv2.fillPoly(img_overlay_fill, [pts], color)
     
     return img_overlay_lines, img_overlay_fill
@@ -410,9 +403,9 @@ def plot_car_offset_lines(img, offset, mpp_x, side):
     
     #draw car center
     cv2.line(overlay, (int(img_width / 2), img_height - line_height),
-             (int(img_width / 2), img_height), car_center_color, 5)
+             (int(img_width / 2), img_height), car_center_color, 1)
     cv2.line(overlay, (int(lane_center), img_height - line_height),
-             (int(lane_center), img_height), lane_center_color, 5)
+             (int(lane_center), img_height), lane_center_color, 1)
     
     return overlay
 
@@ -425,6 +418,123 @@ def undistort_and_overlay(img, src_points, overlays):
                                               src_points,
                                               reverse=True)
         udist_overlay = np.where(udist_overlay < 50, 0, udist_overlay)
-        img_out = overlay_image(img_out, udist_overlay, opacity=overlay['opacity'])
+        img_out = overlay_image(img_out, udist_overlay, 
+                                opacity=overlay['opacity'])
 
     return img_out
+
+
+def get_lane_info(img, camera_setup, src_points, vertical_sampling, timing,
+                  poly_left=None, poly_right=None):
+    """Lane detection pipeline function."""
+    #Correct for camera distortion:
+    #############################
+    start = time.time()
+    #############################
+    udist = cv2.undistort(img, 
+                          camera_setup['camera_matrix'], 
+                          camera_setup['distortion_coeff'], 
+                          None, 
+                          camera_setup['camera_matrix'])
+    #############################
+    timing['distortion_correction'] += time.time() - start
+    #############################
+    
+    #############################
+    start = time.time()
+    #############################
+
+    """Tune source points to ensure that lane lines run vertically for a straight piece of road. """
+    
+    warped = perspective_transform(udist, src_points)
+    
+    #############################
+    timing['perspective_transformations'] += time.time() - start
+    #############################
+    
+    #############################
+    start = time.time()
+    #############################
+    
+    aoi = ((int(0.44 * 1280), int(0.0 * 720)),
+           (int(0.57 * 1280), int(1.0 * 720))) #area of interest
+    
+    accentuated = np.zeros((warped.shape[0], warped.shape[1]))
+    accentuated[aoi[0][1]:aoi[1][1], aoi[0][0]:aoi[1][0]] = \
+        accentuate_lane_lines(warped[aoi[0][1]:aoi[1][1], aoi[0][0]:aoi[1][0], :])
+    
+    #############################
+    timing['image_manipulation'] += time.time() - start
+    #############################
+    
+    #############################
+    start = time.time()
+    #############################
+    #Detect lane markings
+    left_peaks, right_peaks = detect_lines(accentuated, vertical_sampling, 
+                                           poly_left=poly_left, poly_right=poly_right)
+    
+    #Fit polynomials to result
+    left_lane_poly, points_left = get_lane_poly(left_peaks)
+    right_lane_poly, points_right = get_lane_poly(right_peaks)
+
+    if points_left < 6:
+        print("Left")
+        left_lane_poly = poly_left
+    if points_right < 6:
+        print("Right")
+        right_lane_poly = poly_right
+    
+    
+    #Get lane corner radius and car offset
+    mpp_x = 3.7/camera_setup['pixels_between_lanes'] #meters per pixel in x-direction
+    mpp_y = 3.0/camera_setup['pixels_along_dash'] #meters per pixel in y-direction
+    
+    coeff_scaling = [mpp_x / (mpp_y ** 2), (mpp_x/mpp_x), 1]
+
+    dominant_poly, lane = (left_lane_poly, 'left') if \
+        points_left > points_right else (right_lane_poly, 'right')
+    poly_real = [coeff * coeff_scaling[i] for i, coeff in enumerate(dominant_poly)]
+
+    lane_radius, direction = get_lane_curvature(poly_real, warped.shape[0]*mpp_y)
+    lane_rad_string = "Radius: " + "{:1.2f}".format(lane_radius) + 'm to the ' + direction 
+    
+    car_offset, side = get_car_offset(dominant_poly, lane, warped.shape[0], warped.shape[1], 
+                                      camera_setup['pixels_between_lanes'], mpp_x)
+    car_pos_string = "Offset: " + "{:1.2f}".format(car_offset) + 'm to the ' + side 
+    
+    #############################
+    timing['polynomial_fitting'] += time.time() - start
+    #############################
+    
+    #############################
+    start = time.time()
+    #############################
+    
+    #Create image overlay for output
+    overlay_lines, overlay_fill = get_highlighted_lane(left_lane_poly, right_lane_poly, accentuated)
+    overlay_offset = plot_car_offset_lines(warped, car_offset, mpp_x, side)
+    
+    # undistort lane detection annotations
+    overlays = ({'image': overlay_lines,  'opacity': 0.8},
+                {'image': overlay_fill,   'opacity': 0.3},
+                {'image': overlay_offset, 'opacity': 0.8},)
+
+    img_with_overlay = undistort_and_overlay(udist, src_points, overlays)
+    
+    #############################
+    timing['perspective_transformations'] += time.time() - start
+    #############################
+    
+    #############################
+    start = time.time()
+    #############################
+
+    img_with_overlay = darken_bg(img_with_overlay, img.shape[0] - 40,  img.shape[0], 0, img.shape[1])
+    img_with_overlay = plot_text(img_with_overlay, lane_rad_string, 'left') 
+    img_with_overlay = plot_text(img_with_overlay, car_pos_string, 'right')
+    #############################
+    timing['annotating_images'] += time.time() - start
+    #############################
+    
+    return img_with_overlay, left_lane_poly, right_lane_poly, timing
