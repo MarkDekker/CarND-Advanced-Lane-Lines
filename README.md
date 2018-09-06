@@ -518,7 +518,7 @@ print('Time spent on polynomial fitting:', round(timing['polynomial_fitting'], 1
     Time spent on polynomial fitting: 5.3 seconds.
 
 
-The resulting video can be found [here](/output_video/project_video_annotated.mp4).
+The resulting video can be found [here](output_video/project_video_annotated.mp4).
 
 # Discussion
 
