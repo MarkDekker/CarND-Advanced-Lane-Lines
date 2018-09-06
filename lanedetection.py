@@ -197,7 +197,7 @@ def accentuate_lane_lines(image):
     sobel_shifted = (translate_horz(sobel, direction='left', shift=0.01) * 0.5 +
                      translate_horz(sobel, direction='right', shift=0.01)  * 0.5)
 
-    combo_img =  combine_images(red, sobel_shifted, method='multiply')
+    combo_img = combine_images(red, sobel_shifted, method='multiply')
     combo_img = exposure.adjust_gamma(combo_img, gamma=2)
 
     _, norm_thresh = cv2.threshold(normalise_image(combo_img), 
